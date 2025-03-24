@@ -1,5 +1,6 @@
 //GET the environment variables
 require("dotenv").config();
+const removeUnverifiedAccounts = require("./automation/removeUnverifiedAccounts")
 //Connect with the database
 require("./database/dbConnection");
 
@@ -9,9 +10,6 @@ const cookieParser = require("cookie-parser");
 const cors = require("cors");
 const userRouter = require("./routes/userRouter");
 const { errorMiddleware } = require("./middleware/error");
-
-const PORT = process.env.PORT || 2025;
-
 const app = express();
 
 //TO avoid cors error while connecting with the frontend
@@ -32,9 +30,11 @@ app.use(morgan("dev"));
 
 app.use("/api/v1/user", userRouter);
 
+//cron job
+removeUnverifiedAccounts()
+
 //middleware to handle error in the entire backend
 app.use(errorMiddleware);
 
-app.listen(PORT, () => {
-  console.log("App started...............");
-});
+module.exports = app
+
