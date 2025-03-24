@@ -23,13 +23,14 @@ app.use(
   })
 );
 
-// app.use(cookieParser)
+//enables req.cookies
+app.use(cookieParser())
 
 app.use(express.json());
 
 app.use(morgan("dev"));
 
-app.use("/api/v1", userRouter);
+app.use("/api/v1/user", userRouter);
 
 //middleware to handle error in the entire backend
 app.use(errorMiddleware);

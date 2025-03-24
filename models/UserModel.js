@@ -1,7 +1,7 @@
 const mongoose = require("mongoose");
 const bcrypt = require("bcrypt");
-const crypto = require("crypto")
-const jwt = require("jsonwebtoken")
+const crypto = require("crypto");
+const jwt = require("jsonwebtoken");
 
 const userSchema = new mongoose.Schema({
   name: String,
@@ -10,8 +10,8 @@ const userSchema = new mongoose.Schema({
     type: String,
     minLength: [8, "Password must have atleast 8 characters"],
     maxLength: [8, "Password cannot have more than 32 characters"],
+    select: false,
   },
-  phone: String,
   accountVerified: { type: Boolean, default: false },
   verificationCode: Number,
   verificationCodeExpire: Date,
@@ -64,7 +64,7 @@ userSchema.methods.generateResetPasswordToken = function () {
     .update(resetToken)
     .digest("hex");
 
-  this.resetPasswordExpire = Date.now() + 15 * 60 * 1000;
+  this.resetPasswordExpire = Date.now() + 55 * 60 * 1000;
 
   return resetToken;
 };

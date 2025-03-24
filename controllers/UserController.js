@@ -1,22 +1,15 @@
-const {ErrorHandler} = require("../middleware/error");
+const { ErrorHandler } = require("../middleware/error");
 const catchAsyncError = require("../middleware/catchAsyncError");
 const User = require("../models/UserModel");
 const sendEmail = require("../utils/sendMail");
 const sendToken = require("../utils/sendToken");
+const crypto = require("crypto");
 
 const register = catchAsyncError(async (req, res, next) => {
   try {
-    const { name, email, phone, password, verificationMethod } = req.body;
-    if (!name || !email || !phone || !password || !verificationMethod) {
+    const { name, email, password, verificationMethod } = req.body;
+    if (!name || !email || !password || !verificationMethod) {
       return next(new ErrorHandler("All fields are required", 400));
-    }
-    function validatePhoneNumber(phone) {
-      const phoneRegex = /^\+91[6-9]\d{9}$/;
-      return phoneRegex.test(phone);
-    }
-
-    if (!validatePhoneNumber(phone)) {
-      return next(new ErrorHandler("Invalid phone number", 400));
     }
 
     //if user has already registered
@@ -57,7 +50,6 @@ const register = catchAsyncError(async (req, res, next) => {
     const userData = {
       name,
       email,
-      phone,
       password,
     };
     //create the user entry in the db
@@ -69,12 +61,7 @@ const register = catchAsyncError(async (req, res, next) => {
     user.save();
 
     //send the otp
-    sendVerificationCode(
-      verificationCode,
-      email,
-      res,
-      name
-    );
+    sendVerificationCode(verificationCode, email, res, name);
 
     //send back the response
     res.status(200).json({
@@ -85,12 +72,7 @@ const register = catchAsyncError(async (req, res, next) => {
   }
 });
 
-async function sendVerificationCode(
-  verificationCode,
-  email,
-  res,
-  name
-) {
+async function sendVerificationCode(verificationCode, email, res, name) {
   try {
     const message = generateEmailTemplate(verificationCode);
     sendEmail({ email, subject: "Your Verification Code", message });
@@ -128,15 +110,7 @@ function generateEmailTemplate(verificationCode) {
 }
 
 const verifyOtp = catchAsyncError(async (req, res, next) => {
-  const { email, otp, phone } = req.body;
-
-  function validatePhoneNumber(phone) {
-    const phoneRegex = /^\+91[6-9]\d{9}$/;
-    return phoneRegex.test(phone);
-  }
-  if (!validatePhoneNumber(phone)) {
-    return next(new ErrorHandler("Invalid phone number", 400));
-  }
+  const { email, otp } = req.body;
 
   try {
     // sorting in descending order to get the latest user entry
@@ -191,8 +165,10 @@ const verifyOtp = catchAsyncError(async (req, res, next) => {
     }
 
     user.accountVerified = true;
-    user.verificationCode = null;
-    user.verificationCodeExpire = null;
+    // user.verificationCode = null;
+    user.verificationCode = undefined;
+    // user.verificationCodeExpire = null;
+    user.verificationCodeExpire = undefined;
 
     //check validateModifiedOnly
 
@@ -206,7 +182,129 @@ const verifyOtp = catchAsyncError(async (req, res, next) => {
   }
 });
 
+const login = catchAsyncError(async (req, res, next) => {
+  const { email, password } = req.body;
+  if (!email || !password) {
+    return next(new ErrorHandler("Email and password are required"), 400);
+  }
+
+  const user = await User.findOne({ email, accountVerified: true }).select(
+    "+password"
+  );
+
+  if (!user) {
+    return next(new ErrorHandler("Invalid email or password"), 400);
+  }
+
+  const isPasswordMatched = await user.comparePassword(password);
+
+  if (!isPasswordMatched) {
+    return next(new ErrorHandler("Invalid email or password"), 400);
+  }
+
+  //generate a new jwt and send it to the client
+  sendToken(user, 200, "User logged in successfully ", res);
+});
+
+const logout = catchAsyncError(async (req, res, next) => {
+  //send the response with an empty cookie, removing the jwt token
+  res
+    .status(200)
+    .cookie("token", null, { expires: new Date(Date.now()), httpOnly: true })
+    .json({
+      success: true,
+      message: "logged out successfully",
+    });
+});
+
+const getUser = catchAsyncError(async (req, res, next) => {
+  //this is the user which is logged in, in auth middleware we set it
+  const user = req.user;
+  res.status(200).json({
+    success: true,
+    user,
+  });
+});
+
+const forgotPassword = catchAsyncError(async (req, res, next) => {
+  const user = await User.findOne({
+    email: req.body.email,
+    accountVerified: true,
+  });
+  if (!user) {
+    return next(new ErrorHandler("User not found", 404));
+  }
+  const resetToken = user.generateResetPasswordToken();
+  await user.save({ validteBeforeSave: false });
+  const resetPasswordUrl = `${process.env.FRONTEND_URL}/password/${resetToken}`;
+  const message = `Your Reset Password Token is:- \n\n ${resetPasswordUrl} \n\n If you have not requested this email then please ignore it.`;
+
+  try {
+    sendEmail({
+      email: user.email,
+      subject: "MERN AUTHENTICATION APP RESET PASSWORD",
+      message,
+    });
+    res.status(200).json({
+      success: true,
+      message: `Email sent to ${user.email} successfully.`,
+    });
+  } catch (error) {
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpire = undefined;
+    await user.save({ validateBeforeSave: false });
+    return next(
+      new ErrorHandler(
+        error.message ? error.message : "Cannot send reset password token.",
+        500
+      )
+    );
+  }
+});
+
+const resetPassword = catchAsyncError(async (req, res, next) => {
+  const { token } = req.params;
+  const resetPasswordToken = crypto
+    .createHash("sha256")
+    .update(token)
+    .digest("hex");
+
+  //getting the user who has the same reset password token who has clicked on the password reset url
+  //and also his/her user,s reset password token is still valid
+  const user = await User.findOne({
+    resetPasswordToken,
+    resetPasswordExpire: { $gt: Date.now() },
+  });
+  if (!user) {
+    return next(
+      new ErrorHandler(
+        "Reset password token is invalid or has been expired.",
+        400
+      )
+    );
+  }
+
+  //when entering new passwords 2 times on password and confirmPassword inputs
+  if (req.body.password !== req.body.confirmPassword) {
+    return next(
+      new ErrorHandler("Password & confirm password do not match.", 400)
+    );
+  }
+
+  user.password = req.body.password;
+  user.resetPasswordToken = undefined;
+  user.resetPasswordExpire = undefined;
+  await user.save();
+  //sending new jwt after password resetting as well
+  sendToken(user, 200, "Reset Password Successfully.", res);
+});
+
 module.exports = {
   register,
   verifyOtp,
+  login,
+  logout,
+  getUser,
+  forgotPassword,
+  resetPassword,
 };
